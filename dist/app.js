@@ -5,7 +5,8 @@ function applyTheme(theme){const dark=theme==='dark';document.documentElement.da
 applyTheme(storedTheme()||(systemTheme.matches?'dark':'light'));
 $('#themeToggle').onclick=()=>{const next=document.documentElement.dataset.theme==='dark'?'light':'dark';applyTheme(next);try{localStorage.setItem('palette-theme',next);}catch{}};
 systemTheme.addEventListener('change',e=>{if(!storedTheme())applyTheme(e.matches?'dark':'light');});
-const photo = $('#photo'), stage = $('#stage'), svg = $('#connections');
+const photo = $('#photo'), stage = $('#stage'), svg = $('#connections'), imageViewport=$('#imageViewport');
+let imageView={zoom:1,x:.5,y:.5},imagePan=null;
 const full = document.createElement('canvas'), ctx = full.getContext('2d', {willReadFrequently:true});
 const small = document.createElement('canvas'), sc = small.getContext('2d', {willReadFrequently:true});
 let palette = [], pixels = [], count = 6, currentName = 'Misty mountains.jpg', busy = false, picked = null, currentURL = null, generation = 0;
@@ -23,7 +24,7 @@ function nameColour(c){const l=lab(c);return names.reduce((best,n)=>distance(l,n
 let toastTimer;
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3000);}
 async function copy(text){try{await navigator.clipboard.writeText(text);toast(text.length<25?`${text} copied`:'Palette copied to clipboard');}catch{const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity=0;document.body.append(area);area.select();const ok=document.execCommand('copy');area.remove();toast(ok?'Copied to clipboard':'Could not copy. Use Export to save your colours.');}}
-function setBusy(value){busy=value;$('#loading').hidden=!value;$('#plus').disabled=value||count>=12;$('#minus').disabled=value||count<=4;$('#upload').disabled=value;$('#reset').disabled=value;$('#copyAll').disabled=value||!palette.length;$('#export').disabled=value||!palette.length;}
+function setBusy(value){busy=value;$('#loading').hidden=!value;$('#plus').disabled=value||count>=12;$('#minus').disabled=value||count<=4;$('#upload').disabled=value;$('#reset').disabled=value;$('#copyAll').disabled=value||!palette.length;$('#export').disabled=value||!palette.length;updateZoomControls(pointData().length);}
 function extract(k){
  if(!pixels.length)return [];
  // Deterministic farthest-point seeds, followed by perceptual k-means.
@@ -55,11 +56,11 @@ function render(){
  requestAnimationFrame(layout);
 }
 function highlight(index){document.querySelectorAll('.callout').forEach(e=>e.classList.toggle('active',Number(e.dataset.index)===index));svg.querySelectorAll('.leader-group,.point-handle').forEach(g=>{g.style.opacity=index<0||Number(g.dataset.index)===index?'1':'.35';});}
-function geometry(){const s=stage.getBoundingClientRect(),p=photo.getBoundingClientRect();return {w:s.width,h:s.height,x:p.left-s.left,y:p.top-s.top,pw:p.width,ph:p.height};}
+function geometry(){const s=stage.getBoundingClientRect(),p=imageViewport.getBoundingClientRect(),image=photo.getBoundingClientRect();return {w:s.width,h:s.height,x:p.left-s.left,y:p.top-s.top,pw:p.width,ph:p.height,ix:image.left-s.left,iy:image.top-s.top,iw:image.width,ih:image.height};}
 function pointData(g=geometry()){
- const data=palette.map((c,i)=>({...c,index:i,px:g.x+c.x*g.pw,py:g.y+c.y*g.ph}));
- if(picked)data.push({...picked,index:-1,px:g.x+picked.x*g.pw,py:g.y+picked.y*g.ph});
- return data;
+ const data=palette.map((c,i)=>({...c,index:i,px:g.ix+c.x*g.iw,py:g.iy+c.y*g.ih}));
+ if(picked)data.push({...picked,index:-1,px:g.ix+picked.x*g.iw,py:g.iy+picked.y*g.ih});
+ return data.filter(c=>c.px>=g.x-.01&&c.px<=g.x+g.pw+.01&&c.py>=g.y-.01&&c.py<=g.y+g.ph+.01);
 }
 function positions(g=geometry()){
  const mobile=g.w<600,labelWidth=g.w*(mobile?.21:.175),labelHeight=mobile?57:55;
@@ -69,7 +70,8 @@ const svgElement=tag=>document.createElementNS('http://www.w3.org/2000/svg',tag)
 function layout(){
  if(!photo.naturalWidth||!palette.length)return;
  stage.style.minHeight=(Math.ceil((palette.length+(picked?1:0))/2)*(stage.clientWidth<600?64:67)+50)+'px';
- const g=geometry();svg.setAttribute('viewBox',`0 0 ${g.w} ${g.h}`);
+ paintImageView();
+ const g=geometry();updateZoomControls(pointData(g).length);svg.setAttribute('viewBox',`0 0 ${g.w} ${g.h}`);
  let handles=svg.querySelector('.point-handles');if(!handles){handles=svgElement('g');handles.setAttribute('class','point-handles');svg.append(handles);}
  const oldGroups=new Map([...svg.querySelectorAll('.leader-group')].map(e=>[Number(e.dataset.index),e]));
  const oldLabels=new Map([...$('#labels').children].map(e=>[Number(e.dataset.index),e]));
@@ -109,15 +111,21 @@ function refreshPoint(index){
  $('#paletteDescription').textContent=palette.some(c=>c.moved)?'Custom palette. Drag a point to change a colour.':palette.length<count?'This image has fewer distinct colours.':'Colours sampled from your image.';
  layout();
 }
-function samplePoint(index,pixelX,pixelY){
+function samplePoint(index,pixelX,pixelY,reveal=false){
  const point=colourPoint(index);if(!point||!full.width)return false;
  const x=Math.max(0,Math.min(full.width-1,Math.floor(pixelX))),y=Math.max(0,Math.min(full.height-1,Math.floor(pixelY)));
  if(Math.floor(point.x*full.width)===x&&Math.floor(point.y*full.height)===y)return true;
  const value=ctx.getImageData(x,y,1,1).data;
  if(value[3]<128)return false;
- const c=Array.from(value).slice(0,3);Object.assign(point,{rgb:c,hex:hex(c),name:nameColour(c),x:(x+.5)/full.width,y:(y+.5)/full.height,moved:true,share:null});refreshPoint(index);return true;
+ const c=Array.from(value).slice(0,3);Object.assign(point,{rgb:c,hex:hex(c),name:nameColour(c),x:(x+.5)/full.width,y:(y+.5)/full.height,moved:true,share:null});if(reveal)revealPoint(point);refreshPoint(index);return true;
 }
-function sampleClient(index,x,y){const r=photo.getBoundingClientRect();if(!r.width||!r.height)return false;const grip=draggedPoint?.index===index?draggedPoint:null;return samplePoint(index,(x-r.left-(grip?.offsetX||0))/r.width*full.width,(y-r.top-(grip?.offsetY||0))/r.height*full.height);}
+function sampleClient(index,x,y){
+ const r=photo.getBoundingClientRect(),v=imageViewport.getBoundingClientRect();if(!r.width||!r.height)return false;
+ const grip=draggedPoint?.index===index?draggedPoint:null,px=(x-r.left-(grip?.offsetX||0))/r.width*full.width,py=(y-r.top-(grip?.offsetY||0))/r.height*full.height;
+ const minX=Math.max(0,Math.ceil((v.left-r.left)/r.width*full.width-.5)),maxX=Math.min(full.width-1,Math.floor((v.right-r.left)/r.width*full.width-.5));
+ const minY=Math.max(0,Math.ceil((v.top-r.top)/r.height*full.height-.5)),maxY=Math.min(full.height-1,Math.floor((v.bottom-r.top)/r.height*full.height-.5));
+ return samplePoint(index,Math.max(minX,Math.min(maxX,Math.floor(px))),Math.max(minY,Math.min(maxY,Math.floor(py))));
+}
 function flushPoint(){if(pointFrame)cancelAnimationFrame(pointFrame);pointFrame=0;const next=pendingPoint;pendingPoint=null;if(next&&draggedPoint)sampleClient(draggedPoint.index,next.x,next.y);}
 function finishPointDrag(event,cancel=false){
  if(!draggedPoint||event&&event.pointerId!==draggedPoint.pointerId)return;
@@ -140,8 +148,42 @@ window.addEventListener('blur',()=>finishPointDrag(null,true));
 document.addEventListener('keydown',event=>{
  if(event.key==='Escape'&&draggedPoint){event.preventDefault();finishPointDrag(null,true);return;}
  const hit=event.target.closest?.('.pin-hit'),moves={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
- if(!hit||!moves[event.key]||busy||draggedPoint)return;event.preventDefault();const index=Number(hit.dataset.index),point=colourPoint(index);if(!point)return;const [dx,dy]=moves[event.key],step=event.shiftKey?10:1;samplePoint(index,Math.floor(point.x*full.width)+dx*step,Math.floor(point.y*full.height)+dy*step);
+ if(!hit||!moves[event.key]||busy||draggedPoint)return;event.preventDefault();const index=Number(hit.dataset.index),point=colourPoint(index);if(!point)return;const [dx,dy]=moves[event.key],step=event.shiftKey?10:1;samplePoint(index,Math.floor(point.x*full.width)+dx*step,Math.floor(point.y*full.height)+dy*step,true);
 });
+function paintImageView(){
+ if(!photo.naturalWidth)return;
+ imageView=PaletteViewport.clamp(imageView);const wrap=$('#imageWrap'),width=Math.min(wrap.clientWidth,wrap.clientHeight*photo.naturalWidth/photo.naturalHeight),height=width*photo.naturalHeight/photo.naturalWidth;
+ imageViewport.style.width=width+'px';imageViewport.style.height=height+'px';photo.style.width=width+'px';photo.style.height=height+'px';
+ const x=(.5-imageView.x)*imageView.zoom*width,y=(.5-imageView.y)*imageView.zoom*height;
+ photo.style.transform=`translate(${x}px,${y}px) scale(${imageView.zoom})`;imageViewport.classList.toggle('is-zoomed',imageView.zoom>1);imageViewport.classList.toggle('pixel-view',imageView.zoom>=4);
+}
+function updateZoomControls(visible){
+ $('#zoomLevel').value=Math.round(imageView.zoom*100)+'%';$('#zoomLevel').textContent=Math.round(imageView.zoom*100)+'%';$('#zoomOut').disabled=busy||imageView.zoom<=1;$('#zoomIn').disabled=busy||imageView.zoom>=8;$('#zoomFit').disabled=busy||imageView.zoom<=1;
+ const total=palette.length+(picked?1:0),hidden=total-visible;
+ $('#viewHint').textContent=imageView.zoom>1?'Drag image to pan.'+(hidden?` ${hidden} point${hidden===1?' is':'s are'} outside the view.`:''):'Drag a point to sample a colour.';
+}
+function resetImageView(){imageView={zoom:1,x:.5,y:.5};imagePan=null;imageViewport.classList.remove('is-panning');}
+function setImageZoom(zoom,focus={x:.5,y:.5}){if(busy||draggedPoint||imagePan)return;imageView=PaletteViewport.zoomAt(imageView,zoom,focus);layout();}
+function revealPoint(point){
+ if(imageView.zoom<=1)return;const r=imageViewport.getBoundingClientRect(),half=.5/imageView.zoom,mx=Math.min(half/2,14/(r.width*imageView.zoom)),my=Math.min(half/2,14/(r.height*imageView.zoom));
+ if(point.x<imageView.x-half+mx)imageView.x=point.x+half-mx;else if(point.x>imageView.x+half-mx)imageView.x=point.x-half+mx;
+ if(point.y<imageView.y-half+my)imageView.y=point.y+half-my;else if(point.y>imageView.y+half-my)imageView.y=point.y-half+my;imageView=PaletteViewport.clamp(imageView);
+}
+$('#zoomIn').onclick=()=>setImageZoom(imageView.zoom*1.5);$('#zoomOut').onclick=()=>setImageZoom(imageView.zoom/1.5);$('#zoomFit').onclick=()=>{if(busy||draggedPoint||imagePan)return;resetImageView();layout();};
+imageViewport.addEventListener('wheel',event=>{if(busy||draggedPoint||imagePan)return;event.preventDefault();const r=imageViewport.getBoundingClientRect(),delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?r.height:1);setImageZoom(imageView.zoom*Math.exp(-delta*.0015),{x:(event.clientX-r.left)/r.width,y:(event.clientY-r.top)/r.height});},{passive:false});
+imageViewport.addEventListener('keydown',event=>{
+ if(busy||draggedPoint||imagePan)return;
+ if(['+','=','-','0','Home'].includes(event.key)){event.preventDefault();if(event.key==='0'||event.key==='Home'){resetImageView();layout();}else setImageZoom(imageView.zoom*(event.key==='-'?1/1.5:1.5));return;}
+ const moves={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};if(!moves[event.key]||imageView.zoom<=1)return;event.preventDefault();const [dx,dy]=moves[event.key],r=imageViewport.getBoundingClientRect(),step=event.shiftKey?80:20;imageView=PaletteViewport.clamp({...imageView,x:imageView.x+dx*step/(r.width*imageView.zoom),y:imageView.y+dy*step/(r.height*imageView.zoom)});layout();
+});
+function finishImagePan(event,cancel=false){
+ if(!imagePan||event&&event.pointerId!==imagePan.pointerId)return;const pan=imagePan;imagePan=null;if(cancel)imageView=pan.before;imageViewport.classList.remove('is-panning');if(imageViewport.hasPointerCapture(pan.pointerId))imageViewport.releasePointerCapture(pan.pointerId);if(pan.moved)suppressImageClickUntil=performance.now()+300;layout();
+}
+imageViewport.addEventListener('pointerdown',event=>{if(busy||draggedPoint||imagePan||imageView.zoom<=1||event.button!==0)return;event.preventDefault();imageViewport.focus({preventScroll:true});imagePan={pointerId:event.pointerId,x:event.clientX,y:event.clientY,before:{...imageView},moved:false};imageViewport.setPointerCapture(event.pointerId);});
+imageViewport.addEventListener('pointermove',event=>{if(!imagePan||event.pointerId!==imagePan.pointerId)return;const dx=event.clientX-imagePan.x,dy=event.clientY-imagePan.y;if(!imagePan.moved&&Math.hypot(dx,dy)<3)return;event.preventDefault();imagePan.moved=true;imageViewport.classList.add('is-panning');const r=imageViewport.getBoundingClientRect();imageView=PaletteViewport.clamp({...imagePan.before,x:imagePan.before.x-dx/(r.width*imagePan.before.zoom),y:imagePan.before.y-dy/(r.height*imagePan.before.zoom)});layout();});
+imageViewport.addEventListener('pointerup',event=>finishImagePan(event));imageViewport.addEventListener('pointercancel',event=>finishImagePan(event,true));imageViewport.addEventListener('lostpointercapture',event=>{if(imagePan?.pointerId===event.pointerId)finishImagePan(null,true);});
+window.addEventListener('blur',()=>finishImagePan(null,true));document.addEventListener('keydown',event=>{if(event.key==='Escape'&&imagePan){event.preventDefault();finishImagePan(null,true);}});
+
 async function loadImage(source,name,description){
  if(busy)return;setBusy(true);const img=new Image();
  try{
@@ -152,7 +194,7 @@ async function loadImage(source,name,description){
   for(let y=0;y<small.height;y++)for(let x=0;x<small.width;x++){const fx=Math.min(incoming.width-1,Math.floor((x+.5)/small.width*incoming.width)),fy=Math.min(incoming.height-1,Math.floor((y+.5)/small.height*incoming.height)),i=(fy*incoming.width+fx)*4;if(d[i+3]<128)continue;const c=[d[i],d[i+1],d[i+2]];nextPixels.push({rgb:c,lab:lab(c),x:(fx+.5)/incoming.width,y:(fy+.5)/incoming.height});}
   if(!nextPixels.length)throw new Error('This image is fully transparent. Try an image with visible colours.');
   full.width=incoming.width;full.height=incoming.height;ctx.drawImage(incoming,0,0);pixels=nextPixels;
-  currentName=name;photo.src=source;photo.alt=description||`Colour study of ${name}`;await photo.decode();$('#filename').textContent=name;$('#dimensions').textContent=`${full.width} × ${full.height}`;
+  resetImageView();currentName=name;photo.src=source;photo.alt=description||`Colour study of ${name}`;await photo.decode();$('#filename').textContent=name;$('#dimensions').textContent=`${full.width} × ${full.height}`;
   await analyse();
  }catch(e){toast(e.message.includes('image')?e.message:'Could not open this file. Try a JPG, PNG or WebP.');setBusy(false);}
 }
@@ -162,8 +204,8 @@ $('#reset').onclick=()=>loadImage('landscape.jpg','Misty mountains.jpg','Fog dri
 $('#plus').onclick=()=>{if(count<12&&!busy){count++;analyse();}};$('#minus').onclick=()=>{if(count>4&&!busy){count--;analyse();}};
 $('#copyAll').onclick=()=>copy(palette.map(c=>c.hex).join(', '));
 $('#toggleLines').onclick=()=>{const off=stage.classList.toggle('no-lines');$('#toggleLines').textContent=off?'Show annotations':'Hide annotations';$('#toggleLines').setAttribute('aria-pressed',String(!off));};
-photo.onclick=e=>{
- if(busy||draggedPoint||performance.now()<suppressImageClickUntil)return;const r=photo.getBoundingClientRect();const x=Math.min(full.width-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*full.width))),y=Math.min(full.height-1,Math.max(0,Math.floor((e.clientY-r.top)/r.height*full.height)));const p=ctx.getImageData(x,y,1,1).data;
+imageViewport.onclick=e=>{
+ if(busy||draggedPoint||imagePan||performance.now()<suppressImageClickUntil)return;const r=photo.getBoundingClientRect();const x=Math.min(full.width-1,Math.max(0,Math.floor((e.clientX-r.left)/r.width*full.width))),y=Math.min(full.height-1,Math.max(0,Math.floor((e.clientY-r.top)/r.height*full.height)));const p=ctx.getImageData(x,y,1,1).data;
  if(p[3]<128)return toast('This pixel is transparent. Pick a visible part of the image.');const c=Array.from(p).slice(0,3);picked={rgb:c,hex:hex(c),name:nameColour(c),x:(x+.5)/full.width,y:(y+.5)/full.height,share:0};
  stage.classList.remove('no-lines');$('#toggleLines').textContent='Hide annotations';$('#toggleLines').setAttribute('aria-pressed','true');layout();toast(`${picked.hex}, ${picked.name} (exact pixel)`);
 };
