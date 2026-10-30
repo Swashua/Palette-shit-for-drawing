@@ -14,6 +14,10 @@ python -m http.server 5173 --directory dist
 
 Open http://localhost:5173.
 
+## Deploy on Vercel
+
+Import this repository and leave Root Directory empty. The included `vercel.json` serves `dist` directly. No install or build command is needed.
+
 ## Features
 
 - Extract 4 to 12 main colours from an image.
