@@ -10,6 +10,31 @@
   const source=sourceAt(view,focus),next=Math.max(1,Math.min(8,zoom));
   return clamp({zoom:next,x:source.x-(focus.x-.5)/next,y:source.y-(focus.y-.5)/next});
  }
- const api={clamp,sourceAt,project,zoomAt};
+ function anchorPoints(points,box){
+  if(box.width<=0||box.height<=0)return points;
+  const edges=[[],[],[],[]],cx=box.x+box.width/2,cy=box.y+box.height/2;
+  const anchored=points.map(point=>{
+   const dx=(point.px-cx)/(box.width/2),dy=(point.py-cy)/(box.height/2),distance=Math.max(Math.abs(dx),Math.abs(dy));
+   if(distance<=1)return point;
+   // Project to the crop edge in the direction of the actual sample.
+   const marker={...point,offscreen:true,px:cx+(point.px-cx)/distance,py:cy+(point.py-cy)/distance};
+   const edge=Math.abs(dx)>=Math.abs(dy)?(dx<0?0:1):(dy<0?2:3);
+   edges[edge].push(marker);
+   return marker;
+  });
+  // Keep markers separated even when several samples point at the same corner.
+  edges.forEach((markers,edge)=>{
+   if(!markers.length)return;
+   const vertical=edge<2,key=vertical?'py':'px',start=vertical?box.y:box.x,length=vertical?box.height:box.width;
+   const inset=Math.min(14,length/4),span=length-2*inset,gap=Math.min(18,span/Math.max(1,markers.length-1));
+   markers.sort((a,b)=>a[key]-b[key]||a.index-b.index);
+   markers.forEach((marker,i)=>{
+    const fraction=Math.max(0,Math.min(1,(marker[key]-start-inset)/span));
+    marker[key]=start+inset+i*gap+fraction*(span-gap*(markers.length-1));
+   });
+  });
+  return anchored;
+ }
+ const api={clamp,sourceAt,project,zoomAt,anchorPoints};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.PaletteViewport=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

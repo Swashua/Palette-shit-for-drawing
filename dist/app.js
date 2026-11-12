@@ -24,7 +24,7 @@ function nameColour(c){const l=lab(c);return names.reduce((best,n)=>distance(l,n
 let toastTimer;
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3000);}
 async function copy(text){try{await navigator.clipboard.writeText(text);toast(text.length<25?`${text} copied`:'Palette copied to clipboard');}catch{const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity=0;document.body.append(area);area.select();const ok=document.execCommand('copy');area.remove();toast(ok?'Copied to clipboard':'Could not copy. Use Export to save your colours.');}}
-function setBusy(value){busy=value;$('#loading').hidden=!value;$('#plus').disabled=value||count>=12;$('#minus').disabled=value||count<=4;$('#upload').disabled=value;$('#reset').disabled=value;$('#copyAll').disabled=value||!palette.length;$('#export').disabled=value||!palette.length;updateZoomControls(pointData().length);}
+function setBusy(value){busy=value;$('#loading').hidden=!value;$('#plus').disabled=value||count>=12;$('#minus').disabled=value||count<=4;$('#upload').disabled=value;$('#reset').disabled=value;$('#copyAll').disabled=value||!palette.length;$('#export').disabled=value||!palette.length;updateZoomControls();}
 function extract(k){
  if(!pixels.length)return [];
  // Deterministic farthest-point seeds, followed by perceptual k-means.
@@ -60,51 +60,56 @@ function geometry(){const s=stage.getBoundingClientRect(),p=imageViewport.getBou
 function pointData(g=geometry()){
  const data=palette.map((c,i)=>({...c,index:i,px:g.ix+c.x*g.iw,py:g.iy+c.y*g.ih}));
  if(picked)data.push({...picked,index:-1,px:g.ix+picked.x*g.iw,py:g.iy+picked.y*g.ih});
- return data.filter(c=>c.px>=g.x-.01&&c.px<=g.x+g.pw+.01&&c.py>=g.y-.01&&c.py<=g.y+g.ph+.01);
+ return PaletteViewport.anchorPoints(data,{x:g.x,y:g.y,width:g.pw,height:g.ph});
 }
-function positions(g=geometry()){
+function positions(g,points){
  const mobile=g.w<600,labelWidth=g.w*(mobile?.21:.175),labelHeight=mobile?57:55;
- return PaletteRouting.route(pointData(g),{x:g.x,y:g.y,width:g.pw,height:g.ph},{width:g.w,height:g.h,labelWidth,labelHeight});
+ return PaletteRouting.route(points,{x:g.x,y:g.y,width:g.pw,height:g.ph},{width:g.w,height:g.h,labelWidth,labelHeight});
 }
 const svgElement=tag=>document.createElementNS('http://www.w3.org/2000/svg',tag);
 function layout(){
  if(!photo.naturalWidth||!palette.length)return;
  stage.style.minHeight=(Math.ceil((palette.length+(picked?1:0))/2)*(stage.clientWidth<600?64:67)+50)+'px';
  paintImageView();
- const g=geometry();updateZoomControls(pointData(g).length);svg.setAttribute('viewBox',`0 0 ${g.w} ${g.h}`);
+ const g=geometry(),points=pointData(g);updateZoomControls(points);svg.setAttribute('viewBox',`0 0 ${g.w} ${g.h}`);
  let handles=svg.querySelector('.point-handles');if(!handles){handles=svgElement('g');handles.setAttribute('class','point-handles');svg.append(handles);}
  const oldGroups=new Map([...svg.querySelectorAll('.leader-group')].map(e=>[Number(e.dataset.index),e]));
  const oldLabels=new Map([...$('#labels').children].map(e=>[Number(e.dataset.index),e]));
- for(const c of positions(g)){
+ for(const c of positions(g,points)){
   let group=oldGroups.get(c.index),fresh=!group;
   if(!group){group=svgElement('g');group.setAttribute('class','leader-group');group.dataset.index=c.index;const path=svgElement('path');path.setAttribute('class','connector');group.append(path);svg.insertBefore(group,handles);}
   oldGroups.delete(c.index);group.style.opacity='1';
-  const path=group.firstElementChild;path.setAttribute('d',c.route.map((p,i)=>`${i?'L':'M'} ${p[0]} ${p[1]}`).join(' '));
+  const path=group.firstElementChild;path.classList.toggle('offscreen-connector',!!c.offscreen);path.setAttribute('d',c.route.map((p,i)=>`${i?'L':'M'} ${p[0]} ${p[1]}`).join(' '));
   if(fresh&&!draggedPoint)path.style.animationDelay=`${Math.max(0,c.index)*45}ms`;else{path.style.animation='none';path.style.strokeDashoffset='0';}
   const exact=Boolean(c.index===-1||c.isPicked||c.moved);
   let b=oldLabels.get(c.index);const newLabel=!b;
   if(!b){b=document.createElement('button');b.className='callout';b.dataset.index=c.index;b.innerHTML='<span class="chip"></span><span class="callout-text"><span class="hex"></span><span class="name"></span></span><span class="copy-icon" aria-hidden="true">⧉</span>';$('#labels').append(b);}
   oldLabels.delete(c.index);b.classList.toggle('active',draggedPoint?draggedPoint.index===c.index:exact);b.style.left=c.lx+'px';b.style.top=c.ly+'px';
   if(newLabel&&!draggedPoint)b.style.animationDelay=`${Math.max(0,c.index)*45}ms`;else b.style.animation='none';
-  b.title=`Copy ${c.hex}, ${c.name}${exact?' (exact pixel)':''}`;b.querySelector('.chip').style.background=c.hex;b.querySelector('.hex').textContent=c.hex;b.querySelector('.name').textContent=(exact?'Picked: ':'')+c.name;
+  b.title=`Copy ${c.hex}, ${c.name}${exact?' (exact pixel)':''}${c.offscreen?' (outside view)':''}`;b.querySelector('.chip').style.background=c.hex;b.querySelector('.hex').textContent=c.hex;b.querySelector('.name').textContent=(exact?'Picked: ':'')+c.name;
   b.onclick=()=>copy((c.index===-1?picked:palette[c.index])?.hex||c.hex);b.onmouseenter=()=>{if(!draggedPoint)highlight(c.index);};b.onmouseleave=()=>{if(!draggedPoint)highlight(-1);};
  }
  oldGroups.forEach(e=>e.remove());oldLabels.forEach(e=>e.remove());
  // Keep the actual drag targets in a stable layer, separate from routed labels.
  // Pointer capture and keyboard focus survive every live layout update.
  const oldHandles=new Map([...handles.children].map(e=>[Number(e.dataset.index),e]));
- for(const c of pointData(g)){
+ for(const c of points){
   let group=oldHandles.get(c.index);
   if(!group){group=svgElement('g');group.setAttribute('class','point-handle');group.dataset.index=c.index;const pin=svgElement('circle');pin.setAttribute('class','pin');const hit=svgElement('circle');hit.setAttribute('class','pin-hit');hit.setAttribute('r','14');hit.setAttribute('tabindex','0');hit.setAttribute('role','button');hit.dataset.index=c.index;group.append(pin,hit);handles.append(group);}
   oldHandles.delete(c.index);group.style.opacity='1';const [pin,hit]=group.children;
   const active=draggedPoint?.index===c.index;group.classList.toggle('drag-active',active);
+  group.classList.toggle('offscreen-point',!!c.offscreen);hit.setAttribute('r',c.offscreen?'9':'14');
   for(const circle of [pin,hit]){circle.setAttribute('cx',c.px);circle.setAttribute('cy',c.py);}
   pin.setAttribute('r',active?7:c.index===-1?6:5);pin.setAttribute('fill',c.hex);
-  hit.setAttribute('aria-label',`Move ${c.index===-1?'picked colour':'colour point '+(c.index+1)}: ${c.hex}, ${c.name}. Use arrow keys; Shift moves ten pixels.`);
+  hit.setAttribute('aria-label',c.offscreen?`Show ${c.hex}, ${c.name}. Outside the current view.`:`Move ${c.index===-1?'picked colour':'colour point '+(c.index+1)}: ${c.hex}, ${c.name}. Use arrow keys; Shift moves ten pixels.`);
  }
  oldHandles.forEach(e=>e.remove());
 }
 function colourPoint(index){return index===-1?picked:palette[index];}
+function showEdgePoint(hit){
+ const point=colourPoint(Number(hit.dataset.index));if(!point||busy||draggedPoint||imagePan)return;
+ imageView=PaletteViewport.clamp({zoom:imageView.zoom,x:point.x,y:point.y});layout();
+}
 function refreshPoint(index){
  const c=colourPoint(index);if(!c)return;
  if(index>=0){const b=$('#swatches').children[index];if(b){b.title=`Copy ${c.hex}, ${c.name}`;b.setAttribute('aria-label',b.title);b.querySelector('.swatch-colour').style.background=c.hex;b.querySelector('.swatch-hex').firstChild.nodeValue=c.hex;b.querySelector('.swatch-name').textContent=c.name;b.querySelector('.swatch-share').textContent=c.share==null?'Picked':Math.round(c.share*100)+'%';}}
@@ -137,10 +142,12 @@ function finishPointDrag(event,cancel=false){
 }
 stage.addEventListener('pointerdown',event=>{
  const hit=event.target.closest?.('.pin-hit');if(!hit||busy||draggedPoint||event.button!==0)return;
+ if(hit.closest('.offscreen-point'))return;
  const index=Number(hit.dataset.index),point=colourPoint(index);if(!point)return;
  event.preventDefault();event.stopPropagation();hit.focus({preventScroll:true});const r=photo.getBoundingClientRect();draggedPoint={index,pointerId:event.pointerId,before:{...point},offsetX:event.clientX-r.left-point.x*r.width,offsetY:event.clientY-r.top-point.y*r.height};stage.classList.add('is-point-dragging');stage.setPointerCapture(event.pointerId);layout();
 });
 stage.addEventListener('pointermove',event=>{if(!draggedPoint||event.pointerId!==draggedPoint.pointerId)return;event.preventDefault();pendingPoint={x:event.clientX,y:event.clientY};if(!pointFrame)pointFrame=requestAnimationFrame(()=>{pointFrame=0;flushPoint();});});
+stage.addEventListener('click',event=>{const hit=event.target.closest?.('.offscreen-point .pin-hit');if(hit)showEdgePoint(hit);});
 stage.addEventListener('pointerup',event=>finishPointDrag(event));
 stage.addEventListener('pointercancel',event=>finishPointDrag(event,true));
 stage.addEventListener('lostpointercapture',event=>{if(draggedPoint?.pointerId===event.pointerId)finishPointDrag(null,true);});
@@ -148,6 +155,7 @@ window.addEventListener('blur',()=>finishPointDrag(null,true));
 document.addEventListener('keydown',event=>{
  if(event.key==='Escape'&&draggedPoint){event.preventDefault();finishPointDrag(null,true);return;}
  const hit=event.target.closest?.('.pin-hit'),moves={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
+ if(hit?.closest('.offscreen-point')){if(event.key==='Enter'||event.key===' '){event.preventDefault();showEdgePoint(hit);}return;}
  if(!hit||!moves[event.key]||busy||draggedPoint)return;event.preventDefault();const index=Number(hit.dataset.index),point=colourPoint(index);if(!point)return;const [dx,dy]=moves[event.key],step=event.shiftKey?10:1;samplePoint(index,Math.floor(point.x*full.width)+dx*step,Math.floor(point.y*full.height)+dy*step,true);
 });
 function paintImageView(){
@@ -157,10 +165,10 @@ function paintImageView(){
  const x=(.5-imageView.x)*imageView.zoom*width,y=(.5-imageView.y)*imageView.zoom*height;
  photo.style.transform=`translate(${x}px,${y}px) scale(${imageView.zoom})`;imageViewport.classList.toggle('is-zoomed',imageView.zoom>1);imageViewport.classList.toggle('pixel-view',imageView.zoom>=4);
 }
-function updateZoomControls(visible){
+function updateZoomControls(points=pointData()){
  $('#zoomLevel').value=Math.round(imageView.zoom*100)+'%';$('#zoomLevel').textContent=Math.round(imageView.zoom*100)+'%';$('#zoomOut').disabled=busy||imageView.zoom<=1;$('#zoomIn').disabled=busy||imageView.zoom>=8;$('#zoomFit').disabled=busy||imageView.zoom<=1;
- const total=palette.length+(picked?1:0),hidden=total-visible;
- $('#viewHint').textContent=imageView.zoom>1?'Drag image to pan.'+(hidden?` ${hidden} point${hidden===1?' is':'s are'} outside the view.`:''):'Drag a point to sample a colour.';
+ const outside=points.some(point=>point.offscreen);
+ $('#viewHint').textContent=imageView.zoom>1?(outside?'Drag to pan. Select an edge dot to jump to its sample.':'Drag image to pan.'):'Drag a point to sample a colour.';
 }
 function resetImageView(){imageView={zoom:1,x:.5,y:.5};imagePan=null;imageViewport.classList.remove('is-panning');}
 function setImageZoom(zoom,focus={x:.5,y:.5}){if(busy||draggedPoint||imagePan)return;imageView=PaletteViewport.zoomAt(imageView,zoom,focus);layout();}

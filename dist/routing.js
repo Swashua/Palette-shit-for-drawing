@@ -5,7 +5,7 @@
   // A picked pixel can coincide with an existing palette anchor. Share its
   // annotation instead of drawing two leaders on top of one another.
   const unique=[];
-  for(const point of points){const duplicate=unique.find(p=>Math.abs(p.px-point.px)<1e-7&&Math.abs(p.py-point.py)<1e-7);if(duplicate){duplicate.isPicked=duplicate.isPicked||point.index===-1;continue;}unique.push({...point});}
+  for(const point of points){const duplicate=!point.offscreen&&unique.find(p=>!p.offscreen&&Math.abs(p.px-point.px)<1e-7&&Math.abs(p.py-point.py)<1e-7);if(duplicate){duplicate.isPicked=duplicate.isPicked||point.index===-1;continue;}unique.push({...point});}
   // All leaders inside the image are parallel. A slight common slope separates
   // anchors on the same row without changing the sampled pixel positions.
   const slopes=[0,.015,-.015,.03,-.03,.045,-.045,.06,-.06];let slope=0,bestGap=-1;

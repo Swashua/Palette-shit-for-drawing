@@ -1,5 +1,6 @@
 const assert=require('node:assert/strict');
 const {route}=require('../dist/routing.js');
+const {anchorPoints,clamp,project}=require('../dist/viewport.js');
 const cross=(a,b,c)=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
 function intersect(a,b,c,d){const p=cross(a,b,c),q=cross(a,b,d),r=cross(c,d,a),s=cross(c,d,b);return p*q < -1e-8 && r*s < -1e-8;}
 let seed=173,checks=0;function random(){seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;}
@@ -16,4 +17,22 @@ for(const width of [316,700,1120,1800])for(let trial=0;trial<350;trial++){
  for(const r of routes){assert.ok(r.ly>=0&&r.ly+r.lh<=height);assert.deepEqual(r.route[0],[r.px,r.py]);}
 }
 const duplicate=route([{index:0,px:200,py:100},{index:-1,px:200,py:100}],{x:150,y:50,width:300,height:200},{width:600,height:400,labelWidth:100,labelHeight:55});assert.equal(duplicate.length,1);assert.equal(duplicate[0].isPicked,true);
+for(const width of [316,1120])for(let trial=0;trial<300;trial++){
+ const image={x:width*.23,y:130,width:width*.54,height:trial%2?80:300},height=520;
+ const view=clamp({zoom:8,x:random(),y:random()});
+ const points=Array.from({length:13},(_,index)=>{const p=project(view,{x:random(),y:random()});return {index,px:image.x+p.x*image.width,py:image.y+p.y*image.height};});
+ const anchors=anchorPoints(points,image);
+ assert.ok(anchors.some(p=>p.offscreen));
+ anchors.forEach((p,i)=>{
+  assert.ok(p.px>=image.x-1e-8&&p.px<=image.x+image.width+1e-8&&p.py>=image.y-1e-8&&p.py<=image.y+image.height+1e-8);
+  if(!p.offscreen)assert.deepEqual(p,points[i]);
+ });
+ const routes=route(anchors,image,{width,height,labelWidth:width*(width<600?.21:.175),labelHeight:57});
+ assert.equal(routes.length,points.length,'zoom hid a label');
+ for(let i=0;i<routes.length;i++)for(let j=i+1;j<routes.length;j++){
+  const a=routes[i].route,b=routes[j].route;
+  for(let u=0;u<2;u++)for(let v=0;v<2;v++)assert.ok(!intersect(a[u],a[u+1],b[v],b[v+1]),'zoom caused a crossing');
+ }
+}
+console.log('PASS: 600 zoomed views retain every annotation without crossing lines.');
 console.log(`PASS: ${checks.toLocaleString()} segment comparisons, 1,400 layouts, equal-row anchors, mobile and desktop spacing, and duplicate picks.`);

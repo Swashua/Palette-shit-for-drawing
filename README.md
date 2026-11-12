@@ -30,7 +30,7 @@ Import this repository and leave Root Directory empty. The included `vercel.json
 
 Focus a point and use the arrow keys to move one pixel, or Shift and an arrow key to move ten. Press Escape to cancel a drag.
 
-Focus the image view to use + and - for zoom, 0 for Fit, or arrow keys to pan. Samples outside the visible area reappear when you pan back or choose Fit. Exports always include the full image.
+Focus the image view to use + and - for zoom, 0 for Fit, or arrow keys to pan. Samples outside the zoomed view stay connected to dots at the image edge. Select a dot to jump to its sample. Exports always include the full image.
 
 Images are processed in your browser. Colour names are approximate. Images can be up to 20 MB and 40 megapixels; pixels with alpha below 128 are skipped. Moving a point replaces its original coverage percentage with "Picked".
 
